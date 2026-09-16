@@ -81,3 +81,17 @@ class GlimpseRateLimitError(GlimpseAPIError):
 
 class GlimpseServerError(GlimpseAPIError):
     """5xx."""
+
+
+class GlimpseAmbiguousTradeStateError(GlimpseError):
+    """A network-level failure happened while submitting a trade-mutating
+    request (``enter-multi-topic-multi-leg`` or any ``exit-*`` endpoint).
+    """
+
+    def __init__(self, path: str, original: Exception) -> None:
+        self.path = path
+        self.original = original
+        super().__init__(
+            f"Network failure while calling {path} — trade state is unknown. "
+            f"Check your portfolio before retrying. Original error: {original!r}"
+        )

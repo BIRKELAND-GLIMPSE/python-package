@@ -16,3 +16,19 @@ class QuoteMode(str, Enum):
     CLOSED = "closed"
     INACTIVE = "inactive"
     RESOLVED = "resolved"
+
+
+class TradeType(str, Enum):
+    """``ExecuteTradeRequest.trade_type``
+    """
+
+    BUY = "buy"
+    SELL = "sell"
+
+
+class Prediction(str, Enum):
+    """``TradeLeg.prediction``
+    """
+
+    YES = "Yes"
+    NO = "No"

@@ -1,7 +1,4 @@
-"""Synchronous client for the Glimpse Nmarket API.
-
-Covers every ``GET`` endpoint and every trade endpoint
-in ``main_glimpse_service/docs/swagger.json``.
+"""Asynchronous client for the Glimpse Nmarket API.
 """
 
 from __future__ import annotations
@@ -42,49 +39,48 @@ from glimpse_markets.models import (
     TradeLeg,
     VolumeByOptionResponse,
 )
-from glimpse_markets.ratelimit import RateLimiter
+from glimpse_markets.ratelimit import AsyncRateLimiter
+from glimpse_markets.streaming import MarketStream
 
 
-class Client(BaseClient):
+class AsyncClient(BaseClient):
     def __init__(
         self,
         api_key: str | None = None,
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = DEFAULT_TIMEOUT,
-        rate_limiter: RateLimiter | None = None,
+        rate_limiter: AsyncRateLimiter | None = None,
         dry_run: bool = False,
     ) -> None:
         super().__init__(api_key=api_key, base_url=base_url)
-        self._http = httpx.Client(timeout=timeout)
-        self._rate_limiter = rate_limiter if rate_limiter is not None else RateLimiter()
+        self._http = httpx.AsyncClient(timeout=timeout)
+        self._rate_limiter = rate_limiter if rate_limiter is not None else AsyncRateLimiter()
         self.dry_run = dry_run
-        """When True, every trade-mutating method simulates via /trades/estimate
-        instead of placing a real order."""
 
     @classmethod
-    def from_env(cls, **kwargs: Any) -> Client:
+    def from_env(cls, **kwargs: Any) -> AsyncClient:
         """Build a client from the ``GLIMPSE_API_KEY`` / ``GLIMPSE_BASE_URL`` env vars."""
         api_key = os.environ.get("GLIMPSE_API_KEY")
         base_url = os.environ.get("GLIMPSE_BASE_URL", DEFAULT_BASE_URL)
         return cls(api_key=api_key, base_url=base_url, **kwargs)
 
-    def close(self) -> None:
-        self._http.close()
+    async def close(self) -> None:
+        await self._http.aclose()
 
-    def __enter__(self) -> Client:
+    async def __aenter__(self) -> AsyncClient:
         return self
 
-    def __exit__(
+    async def __aexit__(
         self,
         exc_type: type[BaseException] | None,
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        self.close()
+        await self.close()
 
-    def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
-        self._rate_limiter.acquire()
-        response = self._http.get(
+    async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        await self._rate_limiter.acquire()
+        response = await self._http.get(
             self._url(path),
             params={k: v for k, v in (params or {}).items() if v is not None},
             headers=self._headers(),
@@ -92,23 +88,25 @@ class Client(BaseClient):
         self._raise_for_error(response)
         return response.json()
 
-    def _post(self, path: str, json_body: dict[str, Any]) -> Any:
+    async def _post(self, path: str, json_body: dict[str, Any]) -> Any:
         """For side-effect-free POSTs (``/trades/estimate``). Not for trade
         execution — see ``_post_mutating``."""
-        self._rate_limiter.acquire()
-        response = self._http.post(self._url(path), json=json_body, headers=self._headers())
+        await self._rate_limiter.acquire()
+        response = await self._http.post(self._url(path), json=json_body, headers=self._headers())
         self._raise_for_error(response)
         return response.json()
 
-    def _post_mutating(self, path: str, json_body: dict[str, Any]) -> Any:
+    async def _post_mutating(self, path: str, json_body: dict[str, Any]) -> Any:
         """For trade-execution POSTs. A network-level failure here can't be
         distinguished from "the order went through but the response was
         lost," so it's surfaced as GlimpseAmbiguousTradeStateError instead
         of a plain transport error
         """
-        self._rate_limiter.acquire()
+        await self._rate_limiter.acquire()
         try:
-            response = self._http.post(self._url(path), json=json_body, headers=self._headers())
+            response = await self._http.post(
+                self._url(path), json=json_body, headers=self._headers()
+            )
         except httpx.TransportError as exc:
             raise GlimpseAmbiguousTradeStateError(path, exc) from exc
         self._raise_for_error(response)
@@ -116,53 +114,50 @@ class Client(BaseClient):
 
     # wallet
 
-    def wallet_balance(self) -> dict[str, Any]:
-        """``GET /api/v1/wallet-balance`` (requires API key).
-
-        No response schema is published by the server (swagger marks it
-        ``additionalProperties: true``), so this returns the raw parsed JSON.
-        """
-        return self._get("/api/v1/wallet-balance")  # type: ignore[no-any-return]
+    async def wallet_balance(self) -> dict[str, Any]:
+        """``GET /api/v1/wallet-balance`` (requires API key)."""
+        return await self._get("/api/v1/wallet-balance")  # type: ignore[no-any-return]
 
     # batches
 
-    def batches(self) -> ListBatchesResponse:
+    async def batches(self) -> ListBatchesResponse:
         """``GET /api/v1/nmarket/batches`` (public)."""
-        return ListBatchesResponse.model_validate(self._get("/api/v1/nmarket/batches"))
+        data = await self._get("/api/v1/nmarket/batches")
+        return ListBatchesResponse.model_validate(data)
 
-    def batch_active_markets(self, batch_id: str) -> BatchMarketsResponse:
+    async def batch_active_markets(self, batch_id: str) -> BatchMarketsResponse:
         """``GET /api/v1/nmarket/batches/{batch_id}/active-markets`` (public)."""
-        data = self._get(f"/api/v1/nmarket/batches/{batch_id}/active-markets")
+        data = await self._get(f"/api/v1/nmarket/batches/{batch_id}/active-markets")
         return BatchMarketsResponse.model_validate(data)
 
-    def batch_markets(self, batch_id: str) -> BatchMarketsResponse:
+    async def batch_markets(self, batch_id: str) -> BatchMarketsResponse:
         """``GET /api/v1/nmarket/batches/{batch_id}/markets`` (public).
 
         All markets in the batch, not just active ones.
         """
-        data = self._get(f"/api/v1/nmarket/batches/{batch_id}/markets")
+        data = await self._get(f"/api/v1/nmarket/batches/{batch_id}/markets")
         return BatchMarketsResponse.model_validate(data)
 
-    def batch_stats(self, batch_id: str) -> BatchStatsResponse:
+    async def batch_stats(self, batch_id: str) -> BatchStatsResponse:
         """``GET /api/v1/nmarket/batches/{batch_id}/stats`` (public)."""
-        data = self._get(f"/api/v1/nmarket/batches/{batch_id}/stats")
+        data = await self._get(f"/api/v1/nmarket/batches/{batch_id}/stats")
         return BatchStatsResponse.model_validate(data)
 
-    def batch_active_markets_page(
+    async def batch_active_markets_page(
         self, batch_id: str, page: int | None = None, page_size: int | None = None
     ) -> BatchMarketsPageResponse:
         """``GET /api/v1/nmarket/v2/batches/{batch_id}/active-markets`` (public, paginated)."""
-        data = self._get(
+        data = await self._get(
             f"/api/v1/nmarket/v2/batches/{batch_id}/active-markets",
             params={"page": page, "page_size": page_size},
         )
         return BatchMarketsPageResponse.model_validate(data)
 
-    def batch_resolved_markets_page(
+    async def batch_resolved_markets_page(
         self, batch_id: str, page: int | None = None, page_size: int | None = None
     ) -> BatchMarketsPageResponse:
         """``GET /api/v1/nmarket/v2/batches/{batch_id}/resolved-markets`` (public, paginated)."""
-        data = self._get(
+        data = await self._get(
             f"/api/v1/nmarket/v2/batches/{batch_id}/resolved-markets",
             params={"page": page, "page_size": page_size},
         )
@@ -170,128 +165,152 @@ class Client(BaseClient):
 
     # markets
 
-    def markets(self, batch_id: str | None = None) -> dict[str, Any]:
+    async def markets(self, batch_id: str | None = None) -> dict[str, Any]:
         """``GET /api/v1/nmarket/markets`` (public). No response schema published."""
-        return self._get(  # type: ignore[no-any-return]
+        return await self._get(  # type: ignore[no-any-return]
             "/api/v1/nmarket/markets", params={"batch_id": batch_id}
         )
 
-    def market_quotes(self, topic_id: int) -> QuotesResponse:
+    async def market_quotes(self, topic_id: int) -> QuotesResponse:
         """``GET /api/v1/nmarket/markets/{topic_id}/quotes`` (public). Live LMSR quote."""
-        data = self._get(f"/api/v1/nmarket/markets/{topic_id}/quotes")
+        data = await self._get(f"/api/v1/nmarket/markets/{topic_id}/quotes")
         return QuotesResponse.model_validate(data)
 
-    def market_stats(self, topic_id: int) -> MarketStatsResponse:
+    async def market_stats(self, topic_id: int) -> MarketStatsResponse:
         """``GET /api/v1/nmarket/markets/{topic_id}/stats`` (public)."""
-        data = self._get(f"/api/v1/nmarket/markets/{topic_id}/stats")
+        data = await self._get(f"/api/v1/nmarket/markets/{topic_id}/stats")
         return MarketStatsResponse.model_validate(data)
 
-    def market_volume(self, topic_id: int) -> VolumeByOptionResponse:
+    async def market_volume(self, topic_id: int) -> VolumeByOptionResponse:
         """``GET /api/v1/nmarket/markets/{topic_id}/volume`` (public)."""
-        data = self._get(f"/api/v1/nmarket/markets/{topic_id}/volume")
+        data = await self._get(f"/api/v1/nmarket/markets/{topic_id}/volume")
         return VolumeByOptionResponse.model_validate(data)
 
     #  ended / resolved market listings
 
-    def ended_by_batch(
+    async def ended_by_batch(
         self, batch_id: str, limit: int | None = None, offset: int | None = None
     ) -> dict[str, Any]:
         """``GET /api/v1/nmarket/ended-by-batch`` (public, paginated).
 
         No response schema is published for this endpoint.
         """
-        return self._get(  # type: ignore[no-any-return]
+        return await self._get(  # type: ignore[no-any-return]
             "/api/v1/nmarket/ended-by-batch",
             params={"batch_id": batch_id, "limit": limit, "offset": offset},
         )
 
-    def ended_past_168h(self, batch_id: str) -> dict[str, Any]:
+    async def ended_past_168h(self, batch_id: str) -> dict[str, Any]:
         """``GET /api/v1/nmarket/ended-past-168h`` (public). No response schema published."""
-        return self._get(  # type: ignore[no-any-return]
+        return await self._get(  # type: ignore[no-any-return]
             "/api/v1/nmarket/ended-past-168h", params={"batch_id": batch_id}
         )
 
-    def resolved_past_168h(self, batch_id: str) -> dict[str, Any]:
+    async def resolved_past_168h(self, batch_id: str) -> dict[str, Any]:
         """``GET /api/v1/nmarket/resolved-past-168h`` (public). No response schema published."""
-        return self._get(  # type: ignore[no-any-return]
+        return await self._get(  # type: ignore[no-any-return]
             "/api/v1/nmarket/resolved-past-168h", params={"batch_id": batch_id}
         )
 
-    def bet_slip(self, uuid: str) -> dict[str, Any]:
+    async def bet_slip(self, uuid: str) -> dict[str, Any]:
         """``GET /api/v1/nmarket/bet-slip-by-uuid`` (public). No response schema published."""
-        return self._get(  # type: ignore[no-any-return]
+        return await self._get(  # type: ignore[no-any-return]
             "/api/v1/nmarket/bet-slip-by-uuid", params={"uuid": uuid}
         )
 
     # portfolio (requires API key)
 
-    def portfolio_active(self) -> PortfolioListResponse:
+    async def portfolio_active(self) -> PortfolioListResponse:
         """``GET /api/v1/nmarket/consolidated-active-portfolio-without-pagination``."""
-        data = self._get("/api/v1/nmarket/consolidated-active-portfolio-without-pagination")
+        data = await self._get("/api/v1/nmarket/consolidated-active-portfolio-without-pagination")
         return PortfolioListResponse.model_validate(data)
 
-    def portfolio_ended(
+    async def portfolio_ended(
         self, limit: int | None = None, offset: int | None = None
     ) -> PaginatedPortfolioListResponse:
         """``GET /api/v1/nmarket/consolidated-ended-unresolved-portfolio``.
 
         Positions in markets that have ended but not yet resolved.
         """
-        data = self._get(
+        data = await self._get(
             "/api/v1/nmarket/consolidated-ended-unresolved-portfolio",
             params={"limit": limit, "offset": offset},
         )
         return PaginatedPortfolioListResponse.model_validate(data)
 
-    def portfolio_resolved(
+    async def portfolio_resolved(
         self, limit: int | None = None, offset: int | None = None
     ) -> PaginatedPortfolioListResponse:
         """``GET /api/v1/nmarket/consolidated-ended-resolved-portfolio``."""
-        data = self._get(
+        data = await self._get(
             "/api/v1/nmarket/consolidated-ended-resolved-portfolio",
             params={"limit": limit, "offset": offset},
         )
         return PaginatedPortfolioListResponse.model_validate(data)
 
-    def portfolio_summary(self) -> ConsolidatedPortfolioSummaryResponse:
+    async def portfolio_summary(self) -> ConsolidatedPortfolioSummaryResponse:
         """``GET /api/v1/nmarket/consolidated-portfolio-summary``."""
-        data = self._get("/api/v1/nmarket/consolidated-portfolio-summary")
+        data = await self._get("/api/v1/nmarket/consolidated-portfolio-summary")
         return ConsolidatedPortfolioSummaryResponse.model_validate(data)
+
+    # streaming
+
+    def stream_market_updates(
+        self, topic_id: int | None = None, batch_id: str | None = None
+    ) -> MarketStream:
+        """A ``MarketStream`` over ``/ws/nmarket-updates``, using this client's ``base_url``.
+
+        No API key is used — the feed is fully public. See ``streaming.py``
+        for the wire protocol (subscribe filtering, message shape, and why
+        there's no resolution event on this feed). Independent of this
+        client's own HTTP connection; open as many as you like.
+        """
+        return MarketStream(base_url=self.base_url, topic_id=topic_id, batch_id=batch_id)
 
     # trades
 
-    def estimate_trade(
+    async def estimate_trade(
         self, topic_id: int, trade_type: TradeType | str, legs: list[TradeLeg]
     ) -> EstimateTradeLegsResponse:
         """``POST /api/v1/nmarket/trades/estimate`` (public).
+
+        Side-effect-free — no funds move and no API key is required. Always
+        call this before ``enter_multi_topic_multi_leg`` or an ``exit_*``
+        call to check cost/price impact; it's also what ``dry_run`` mode
+        uses under the hood.
         """
         request = ExecuteTradeRequest(
             topic_id=topic_id, trade_type=TradeType(trade_type), legs=legs
         )
-        data = self._post(
+        data = await self._post(
             "/api/v1/nmarket/trades/estimate", request.model_dump(mode="json", exclude_none=True)
         )
         return EstimateTradeLegsResponse.model_validate(data)
 
-    def enter_multi_topic_multi_leg(
+    async def enter_multi_topic_multi_leg(
         self, topics: list[EnterMultiTopicLegGroup], *, dry_run: bool | None = None
     ) -> EnterMultiTopicMultiLegResponse | DryRunTradeResult:
         """``POST /api/v1/nmarket/enter-multi-topic-multi-leg`` (requires API key). Buy-only.
+
+        In dry-run mode (client default or this call's ``dry_run``
+        override), no order is placed — each topic/leg group is priced via
+        ``estimate_trade`` instead and a ``DryRunTradeResult`` comes back.
         """
         if self._effective_dry_run(dry_run):
             estimates = [
-                self.estimate_trade(group.topic_id, TradeType.BUY, group.legs) for group in topics
+                await self.estimate_trade(group.topic_id, TradeType.BUY, group.legs)
+                for group in topics
             ]
             return DryRunTradeResult(trade_type=TradeType.BUY, estimates=estimates)
 
         request = EnterMultiTopicMultiLegRequest(topics=topics)
-        data = self._post_mutating(
+        data = await self._post_mutating(
             "/api/v1/nmarket/enter-multi-topic-multi-leg",
             request.model_dump(mode="json", exclude_none=True),
         )
         return EnterMultiTopicMultiLegResponse.model_validate(data)
 
-    def exit_consolidated(
+    async def exit_consolidated(
         self,
         topic_id: int,
         option_id: int,
@@ -302,18 +321,20 @@ class Client(BaseClient):
         """``POST /api/v1/nmarket/exit-consolidated`` (requires API key).
         """
         if self._effective_dry_run(dry_run):
-            contracts = shares if shares else self._current_position_shares(topic_id, option_id)
-            estimate = self.estimate_trade(
+            contracts = shares if shares else await self._current_position_shares(
+                topic_id, option_id
+            )
+            estimate = await self.estimate_trade(
                 topic_id, TradeType.SELL, [TradeLeg(option_id=option_id, contracts=contracts)]
             )
             return DryRunTradeResult(trade_type=TradeType.SELL, estimates=[estimate])
 
         request = ExitSingleRequest(topic_id=topic_id, option_id=option_id, shares=shares)
-        return self._post_mutating(  # type: ignore[no-any-return]
+        return await self._post_mutating(  # type: ignore[no-any-return]
             "/api/v1/nmarket/exit-consolidated", request.model_dump(mode="json", exclude_none=True)
         )
 
-    def exit_consolidated_multi(
+    async def exit_consolidated_multi(
         self, topic_id: int, legs: list[ExitLegReq], *, dry_run: bool | None = None
     ) -> dict[str, Any] | DryRunTradeResult:
         """``POST /api/v1/nmarket/exit-consolidated-multi`` (requires API key).
@@ -322,16 +343,16 @@ class Client(BaseClient):
             trade_legs = [
                 TradeLeg(option_id=leg.option_id, contracts=leg.contracts) for leg in legs
             ]
-            estimate = self.estimate_trade(topic_id, TradeType.SELL, trade_legs)
+            estimate = await self.estimate_trade(topic_id, TradeType.SELL, trade_legs)
             return DryRunTradeResult(trade_type=TradeType.SELL, estimates=[estimate])
 
         request = ExitMultipleLegsRequest(topic_id=topic_id, legs=legs)
-        return self._post_mutating(  # type: ignore[no-any-return]
+        return await self._post_mutating(  # type: ignore[no-any-return]
             "/api/v1/nmarket/exit-consolidated-multi",
             request.model_dump(mode="json", exclude_none=True),
         )
 
-    def exit_multi_topic_multi_leg(
+    async def exit_multi_topic_multi_leg(
         self, topics: list[ExitMultiTopicLegGroup], *, dry_run: bool | None = None
     ) -> ExitMultiTopicMultiLegResponse | DryRunTradeResult:
         """``POST /api/v1/nmarket/exit-multi-topic-multi-leg`` (requires API key).
@@ -343,24 +364,26 @@ class Client(BaseClient):
                     TradeLeg(option_id=leg.option_id, contracts=leg.contracts)
                     for leg in group.legs
                 ]
-                estimates.append(self.estimate_trade(group.topic_id, TradeType.SELL, trade_legs))
+                estimates.append(
+                    await self.estimate_trade(group.topic_id, TradeType.SELL, trade_legs)
+                )
             return DryRunTradeResult(trade_type=TradeType.SELL, estimates=estimates)
 
         request = ExitMultiTopicMultiLegRequest(topics=topics)
-        data = self._post_mutating(
+        data = await self._post_mutating(
             "/api/v1/nmarket/exit-multi-topic-multi-leg",
             request.model_dump(mode="json", exclude_none=True),
         )
         return ExitMultiTopicMultiLegResponse.model_validate(data)
 
-    def exit_batch(
+    async def exit_batch(
         self, batch_id: str, *, dry_run: bool | None = None
     ) -> ExitBatchResponse | DryRunTradeResult:
         """``POST /api/v1/nmarket/exit-batch`` (requires API key).
         """
         if self._effective_dry_run(dry_run):
             legs_by_topic: dict[int, list[TradeLeg]] = {}
-            portfolio = self.portfolio_active()
+            portfolio = await self.portfolio_active()
             for item in portfolio.message or []:
                 if (
                     item.batch_id == batch_id
@@ -372,26 +395,27 @@ class Client(BaseClient):
                         TradeLeg(option_id=item.option_id, contracts=item.shares)
                     )
             estimates = [
-                self.estimate_trade(topic_id, TradeType.SELL, legs)
+                await self.estimate_trade(topic_id, TradeType.SELL, legs)
                 for topic_id, legs in legs_by_topic.items()
             ]
             return DryRunTradeResult(trade_type=TradeType.SELL, estimates=estimates)
 
         request = ExitBatchRequest(batch_id=batch_id)
-        data = self._post_mutating(
+        data = await self._post_mutating(
             "/api/v1/nmarket/exit-batch", request.model_dump(mode="json", exclude_none=True)
         )
         return ExitBatchResponse.model_validate(data)
 
-    # dry-run helpers
+    # dry-run helper
 
     def _effective_dry_run(self, override: bool | None) -> bool:
         return self.dry_run if override is None else override
 
-    def _current_position_shares(self, topic_id: int, option_id: int) -> float:
-        """Look up the current share count for a position
+    async def _current_position_shares(self, topic_id: int, option_id: int) -> float:
+        """Look up the current share count for a position — used to price a
+        dry-run "exit full position" call
         """
-        portfolio = self.portfolio_active()
+        portfolio = await self.portfolio_active()
         for item in portfolio.message or []:
             if item.topic_id == topic_id and item.option_id == option_id and item.shares:
                 return item.shares

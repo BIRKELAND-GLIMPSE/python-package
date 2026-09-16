@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
+from glimpse_markets.enums import Prediction, TradeType
 from glimpse_markets.money import Millisats
 
 
@@ -229,3 +230,163 @@ class ConsolidatedPortfolioSummary(GlimpseModel):
 class ConsolidatedPortfolioSummaryResponse(GlimpseModel):
     success: bool | None = None
     message: ConsolidatedPortfolioSummary | None = None
+
+
+# trade requests
+class TradeLeg(GlimpseModel):
+    option_id: int
+    contracts: float
+    prediction: Prediction | None = None
+    """Optional; omitting it makes the ledger infer from the outcome name."""
+
+
+class ExitLegReq(GlimpseModel):
+    option_id: int
+    contracts: float
+
+
+class EnterMultiTopicLegGroup(GlimpseModel):
+    topic_id: int
+    legs: list[TradeLeg] = Field(min_length=1)
+
+
+class EnterMultiTopicMultiLegRequest(GlimpseModel):
+    topics: list[EnterMultiTopicLegGroup] = Field(min_length=1)
+
+
+class ExecuteTradeRequest(GlimpseModel):
+    topic_id: int
+    trade_type: TradeType
+    legs: list[TradeLeg] = Field(min_length=1)
+
+
+class ExitSingleRequest(GlimpseModel):
+    topic_id: int
+    option_id: int
+    shares: float | None = None
+    """0 or omitted = exit the full position."""
+
+
+class ExitMultiTopicLegGroup(GlimpseModel):
+    topic_id: int
+    legs: list[ExitLegReq] = Field(min_length=1)
+
+
+class ExitMultiTopicMultiLegRequest(GlimpseModel):
+    topics: list[ExitMultiTopicLegGroup] = Field(min_length=1)
+
+
+class ExitMultipleLegsRequest(GlimpseModel):
+    topic_id: int
+    legs: list[ExitLegReq] = Field(min_length=1)
+
+
+class ExitBatchRequest(GlimpseModel):
+    batch_id: str
+
+
+# trade responses
+
+
+class EstimateTradeLegsResponse(GlimpseModel):
+    topic_id: int | None = None
+    trade_type: str | None = None
+    leg_count: int | None = None
+    total_cost: float | None = None
+    total_cost_millisats: Millisats | None = None
+    commission_millisats: Millisats | None = None
+
+
+class EnterMultiTopicTopicResult(GlimpseModel):
+    topic_id: int | None = None
+    trade_id: str | None = None
+    total_cost_millisats: Millisats | None = None
+    commission_millisats: Millisats | None = None
+    error: str | None = None
+    """Set on a per-topic failure even though the overall HTTP call was 200."""
+
+
+class EnterMultiTopicMultiLegResponse(GlimpseModel):
+    results: list[EnterMultiTopicTopicResult] | None = None
+    topics_requested: int | None = None
+    topics_entered: int | None = None
+    topics_failed: int | None = None
+    total_cost_millisats: Millisats | None = None
+    total_commission_millisats: Millisats | None = None
+
+
+class ExitBatchTopicResult(GlimpseModel):
+    topic_id: int | None = None
+    trade_id: str | None = None
+    total_proceeds_millisats: Millisats | None = None
+    commission_millisats: Millisats | None = None
+    error: str | None = None
+    """Set on a per-topic failure even though the overall HTTP call was 200."""
+
+
+class ExitBatchResponse(GlimpseModel):
+    batch_id: str | None = None
+    results: list[ExitBatchTopicResult] | None = None
+    topics_exited: int | None = None
+    topics_failed: int | None = None
+    total_proceeds_millisats: Millisats | None = None
+    total_commission_millisats: Millisats | None = None
+
+
+class ExitMultiTopicMultiLegResponse(GlimpseModel):
+    results: list[ExitBatchTopicResult] | None = None
+    topics_requested: int | None = None
+    topics_exited: int | None = None
+    topics_failed: int | None = None
+    total_proceeds_millisats: Millisats | None = None
+    total_commission_millisats: Millisats | None = None
+
+
+# dry-run
+
+
+class DryRunTradeResult(GlimpseModel):
+    """Returned instead of a real trade response when ``Client(dry_run=True)``.
+    """
+
+    simulated: bool = True
+    trade_type: TradeType
+    estimates: list[EstimateTradeLegsResponse]
+
+
+# streaming (/ws/nmarket-updates) 
+class MarketUpdateQuote(GlimpseModel):
+    option_id: int | None = None
+    option_name: str | None = None
+    yes_price: float | None = None
+    no_price: float | None = None
+    shares: float | None = None
+
+
+class MarketUpdateBinaryQuote(GlimpseModel):
+    option_id: int | None = None
+    option_name: str | None = None
+    price: float | None = None
+    shares: float | None = None
+
+
+class MarketUpdateData(GlimpseModel):
+    topic_id: int | None = None
+    topic_type: str | None = None
+    batch_id: str | None = None
+    alpha: float | None = None
+    pot_size: float | None = None
+    timestamp: int | None = None
+    quotes: list[MarketUpdateQuote] | None = None
+    binary_quotes: list[MarketUpdateBinaryQuote] | None = None
+
+
+
+class MarketUpdate(GlimpseModel):
+    """A single message from the ``/ws/nmarket-updates`` real-time feed.
+    """
+
+    type: str | None = None
+    topic_id: int | None = None
+    batch_id: str | None = None
+    data: MarketUpdateData | None = None
