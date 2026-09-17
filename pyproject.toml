@@ -36,8 +36,8 @@ dependencies = [
 [project.urls]
 Homepage = "https://docs.glimpse.markets"
 Documentation = "https://docs.glimpse.markets"
-Repository = "https://github.com/glimpse-markets/glimpse-markets-python"
-Issues = "https://github.com/glimpse-markets/glimpse-markets-python/issues"
+Repository = "https://github.com/BIRKELAND-GLIMPSE/python-package"
+Issues = "https://github.com/BIRKELAND-GLIMPSE/python-package/issues"
 
 [project.scripts]
 glimpse = "glimpse_markets.cli:main"
