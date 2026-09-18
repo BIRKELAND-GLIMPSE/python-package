@@ -14,6 +14,7 @@ pip install glimpse-markets
 
 ## Contents
 
+- [Installation](#installation)
 - [Features](#features)
 - [Quickstart](#quickstart)
 - [Trading](#trading)
@@ -21,11 +22,38 @@ pip install glimpse-markets
 - [Async client](#async-client)
 - [Real-time streaming](#real-time-streaming)
 - [Building a bot](#building-a-bot)
+- [Forecasting](#forecasting)
 - [CLI](#cli)
 - [Units: millisats vs. price](#units-millisats-vs-price)
 - [Error handling](#error-handling)
 - [Development](#development)
 - [License](#license)
+
+## Installation
+
+```bash
+pip install glimpse-markets
+```
+
+This one command gets you the full client, the `glimpse` CLI, real-time
+streaming, the bot-building layer, and the pure-Python half of the
+forecasting toolkit (`MarketRecorder`, `bucket_probabilities`, `edge`) —
+everything in this README except the two pieces below.
+
+**Two optional extras sit alongside it, installed the same way, whenever
+you actually want them:**
+
+| Extra | Install | Unlocks |
+|---|---|---|
+| `forecasting` | `pip install glimpse-markets[forecasting]` | `TimesFMForecaster` — Google TimesFM 2.5 point + quantile forecasting (pulls in PyTorch) |
+| `yfinance` | `pip install glimpse-markets[yfinance]` | `fetch_yfinance_history()` — real BTC/ETH/PAX-Gold price history from Yahoo Finance |
+
+Install either independently, both together (`pip install
+"glimpse-markets[forecasting,yfinance]"`), or neither — the base package
+never requires them, and nothing breaks if you skip them. `glimpse --help`
+prints a reminder about both any time you want to check what's available.
+See [Forecasting](#forecasting) for what each one actually does and the
+one licensing caveat worth reading before using `yfinance`.
 
 ## Features
 
@@ -206,6 +234,82 @@ An exception raised from `on_quote` or `on_tick` stops the runner and
 propagates out of `run()` — a strategy bug fails loud instead of getting
 silently swallowed. See [`examples/dry_run_strategy.py`](./examples/dry_run_strategy.py)
 for a complete, runnable example.
+
+## Forecasting
+
+Glimpse has no historical/candle data endpoint as of now(we will patch this in very soon), so any forecasting story
+here has to start with data acquisition, not just a model wrapper.
+`glimpse_markets.forecasting` (importable without any extra dependencies —
+only actually running a forecast needs one) provides:
+
+- **`MarketRecorder`** — builds a local price history from `MarketStream`,
+  since that's the SDK's only source of historical data. Updates are
+  event-driven (fired on trades, not a fixed clock tick), so use
+  `resampled_prices_for()` for an evenly spaced series rather than feeding
+  the raw irregular one to a forecaster.
+- **`TimesFMForecaster`** — wraps Google's [TimesFM 2.5](https://github.com/google-research/timesfm)
+  for point + quantile forecasting. Requires `pip install
+  glimpse-markets[forecasting]` (pulls in PyTorch). **Deliberately targets
+  2.5, not the newer 3.0** — TimesFM 3.0's pretrained weights are licensed
+  for non-commercial, non-production use only, which rules them out for a
+  package whose purpose is real trading bots; 2.5 and earlier remain
+  Apache-2.0.
+- **`bucket_probabilities()` / `probability_between()` / `edge()`** — maps
+  a decile forecast onto Glimpse's bucketed-option markets (parsing names
+  like `"64000-65000"`) and compares the model-implied probability to the
+  live LMSR price. Pure Python, model-agnostic — works with
+  `TimesFMForecaster`'s output, or with your own forecast of the
+  *underlying asset* from whatever external price-data source you already
+  use (this package doesn't pick a vendor for that)...
+- **...except `fetch_yfinance_history()`**, the one deliberate exception —
+  a convenience adapter for pulling real BTC/ETH/PAX-Gold price history
+  from Yahoo Finance via `yfinance`, for forecasting the *underlying asset*
+  Glimpse's markets track rather than Glimpse's own quote history. Requires
+  `pip install glimpse-markets[yfinance]` (a separate extra from
+  `forecasting`, since you may want one without the other). **Read this
+  before using it:** Yahoo's own terms describe their finance data as
+  personal-use-only (stated twice, in bold, in `yfinance`'s own README) —
+  fine for research and development, but check Yahoo's actual terms
+  yourself before relying on it for anything commercial. Not installed by
+  default, and never will be without you opting in explicitly.
+
+```python
+import asyncio
+from glimpse_markets import AsyncClient
+from glimpse_markets.forecasting import MarketRecorder, TimesFMForecaster, bucket_probabilities
+
+async def main():
+    recorder = MarketRecorder(persist_path="btc_7120.ndjson")
+    async with AsyncClient() as client:
+        async with client.stream_market_updates(topic_id=7120) as stream:
+            async for update in stream:
+                recorder.record(update)
+                # once you've accumulated enough history:
+                # series = recorder.resampled_prices_for(7120, option_id, interval_seconds=60)
+                # forecast = TimesFMForecaster().forecast(series, horizon=60)
+                # quotes = await client.market_quotes(7120)
+                # for s in bucket_probabilities(quotes.outcomes, forecast.deciles_at(-1)):
+                #     print(s.name, s.market_price, s.model_probability, s.edge)
+
+asyncio.run(main())
+```
+
+`edge()` is a raw signal, not investment advice — it says nothing about
+confidence, fees, slippage, or whether the model itself is any good.
+
+Forecasting the underlying asset instead of Glimpse's own quotes (read the
+license note above first):
+
+```python
+from glimpse_markets.forecasting import fetch_yfinance_history, TimesFMForecaster, bucket_probabilities
+
+btc_history = fetch_yfinance_history("BTC-USD", period="60d", interval="1h")
+forecast = TimesFMForecaster().forecast(btc_history, horizon=24)
+
+quotes = client.market_quotes(7120)  # a Daily Bitcoin Markets topic
+for s in bucket_probabilities(quotes.outcomes, forecast.deciles_at(-1)):
+    print(s.name, s.market_price, s.model_probability, s.edge)
+```
 
 ## CLI
 

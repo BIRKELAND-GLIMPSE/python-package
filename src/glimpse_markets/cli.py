@@ -68,7 +68,15 @@ def _parse_leg(value: str) -> TradeLeg:
         ) from exc
 
 
-@click.group()
+_EXTRAS_NOTICE = """\
+\b
+Optional extras (not installed by default):
+  pip install glimpse-markets[forecasting]  TimesFM 2.5 forecasting (point + quantile)
+  pip install glimpse-markets[yfinance]     Real BTC/ETH/PAX-Gold history from Yahoo Finance
+"""
+
+
+@click.group(epilog=_EXTRAS_NOTICE)
 @click.version_option(version=__version__, prog_name="glimpse")
 def main() -> None:
     """Glimpse Nmarket API command-line client."""

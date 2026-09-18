@@ -27,7 +27,7 @@ from glimpse_markets.money import Millisats, PriceUnits, millisats_to_sats, sats
 from glimpse_markets.strategy import PositionTracker, Strategy, StrategyRunner
 from glimpse_markets.streaming import MarketStream
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "Client",

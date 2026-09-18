@@ -43,6 +43,14 @@ Issues = "https://github.com/BIRKELAND-GLIMPSE/python-package/issues"
 glimpse = "glimpse_markets.cli:main"
 
 [project.optional-dependencies]
+forecasting = [
+    "timesfm[torch]>=2.0",
+]
+yfinance = [
+    # Convenience only -- Yahoo's finance data is personal-use-only per
+    # yfinance's own README. See forecasting/sources.py before using this.
+    "yfinance>=0.2",
+]
 dev = [
     "ruff>=0.6",
     "mypy>=1.11",
@@ -77,6 +85,13 @@ mypy_path = "src"
 strict = true
 warn_unused_ignores = true
 show_error_codes = true
+
+[[tool.mypy.overrides]]
+# Optional 'forecasting' / 'yfinance' extras -- not installed by default,
+# only needed to actually run TimesFMForecaster / fetch_yfinance_history
+# (imports are lazy, see model.py / sources.py).
+module = ["timesfm", "timesfm.*", "numpy", "numpy.*", "yfinance", "yfinance.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

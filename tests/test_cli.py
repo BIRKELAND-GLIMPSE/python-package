@@ -261,3 +261,16 @@ def test_portfolio_missing_key(monkeypatch) -> None:
     result = _runner().invoke(main, ["portfolio", "active"])
     assert result.exit_code == 1
     assert "GLIMPSE_API_KEY is required" in result.output
+
+
+def test_help_mentions_optional_extras() -> None:
+    result = _runner().invoke(main, ["--help"])
+    assert result.exit_code == 0
+    assert "glimpse-markets[forecasting]" in result.output
+    assert "glimpse-markets[yfinance]" in result.output
+
+
+def test_bare_invocation_also_shows_extras_notice() -> None:
+    result = _runner().invoke(main, [])
+    assert "glimpse-markets[forecasting]" in result.output
+    assert "glimpse-markets[yfinance]" in result.output
