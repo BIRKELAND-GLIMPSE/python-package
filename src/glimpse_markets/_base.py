@@ -4,6 +4,10 @@
 from __future__ import annotations
 
 import contextlib
+import math
+import time
+from datetime import timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -21,6 +25,27 @@ from glimpse_markets.exceptions import (
 
 DEFAULT_BASE_URL = "https://main.bpmapi.io"
 DEFAULT_TIMEOUT = 30.0
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    """Return a finite delay for a seconds value or an HTTP-date.
+
+    A malformed advisory header must not mask the underlying HTTP 429.
+    """
+    if not value:
+        return None
+    try:
+        seconds = float(value)
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(value)
+            # The obsolete asctime HTTP-date format has no explicit zone.
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=timezone.utc)
+            return max(0.0, retry_at.timestamp() - time.time())
+        except (ValueError, TypeError, OverflowError):
+            return None
+    return seconds if math.isfinite(seconds) and seconds >= 0 else None
 
 
 class BaseClient:
@@ -63,7 +88,7 @@ class BaseClient:
             raise GlimpseNotFoundError(status, error, reason, message, body)
         if status == 429:
             retry_after_header = response.headers.get("Retry-After")
-            retry_after = float(retry_after_header) if retry_after_header else None
+            retry_after = _parse_retry_after(retry_after_header)
             raise GlimpseRateLimitError(
                 status, error, reason, message, body, retry_after=retry_after
             )

@@ -70,8 +70,9 @@ class GlimpseValidationError(GlimpseAPIError):
 class GlimpseRateLimitError(GlimpseAPIError):
     """429 — the 60-requests/60-seconds per-API-key limit was exceeded.
 
-    ``.retry_after`` mirrors the server's ``Retry-After`` header (seconds),
-    when present.
+    ``.retry_after`` is a non-negative delay in seconds, parsed from the
+    server's ``Retry-After`` seconds value or HTTP-date. It is ``None``
+    when the header is absent or invalid.
     """
 
     def __init__(self, *args: Any, retry_after: float | None = None, **kwargs: Any) -> None:
