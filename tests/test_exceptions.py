@@ -1,7 +1,12 @@
+from unittest.mock import patch
+
 import httpx
 import pytest
+import respx
 
 from glimpse_markets._base import BaseClient
+from glimpse_markets.async_client import AsyncClient
+from glimpse_markets.client import Client
 from glimpse_markets.exceptions import (
     GlimpseAPIError,
     GlimpseAuthenticationError,
@@ -97,3 +102,59 @@ def test_error_str_includes_status_and_reason() -> None:
     assert "403" in text
     assert "TRADING_NOT_ALLOWED" in text
     assert "SUITABILITY_NOT_MET" in text
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        ("Fri, 02 Oct 2026 12:00:30 GMT", 30.0),
+        ("Fri, 02 Oct 2026 11:59:30 GMT", 0.0),
+        ("Friday, 02-Oct-26 12:00:30 GMT", 30.0),
+        ("Fri Oct  2 12:00:30 2026", 30.0),
+        ("Fri, 32 Oct 2026 12:00:30 GMT", None),
+        ("", None),
+        ("not a delay", None),
+        ("-1", None),
+        ("nan", None),
+        ("inf", None),
+        ("1e999", None),
+        ("0", 0.0),
+        ("1.5", 1.5),
+    ],
+)
+def test_429_retry_after_does_not_hide_rate_limit_error(
+    header: str, expected: float | None
+) -> None:
+    body = {"error": "rate limited", "message": "slow down"}
+    with (
+        patch("time.time", return_value=1790942400.0),
+        pytest.raises(GlimpseRateLimitError) as exc_info,
+    ):
+        BaseClient._raise_for_error(_response(429, body, headers={"Retry-After": header}))
+    assert exc_info.value.retry_after == expected
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.raw == body
+
+
+@respx.mock
+def test_sync_client_surfaces_rate_limit_error_without_retrying() -> None:
+    route = respx.get("https://main.bpmapi.io/api/v1/nmarket/batches").mock(
+        return_value=httpx.Response(429, headers={"Retry-After": "invalid"})
+    )
+    with Client() as client, pytest.raises(GlimpseRateLimitError) as exc_info:
+        client.batches()
+    assert exc_info.value.retry_after is None
+    assert route.call_count == 1
+
+
+@respx.mock
+async def test_async_client_surfaces_rate_limit_error_without_retrying() -> None:
+    route = respx.get("https://main.bpmapi.io/api/v1/nmarket/batches").mock(
+        return_value=httpx.Response(429, headers={"Retry-After": "Fri, 02 Oct 2026 12:00:30 GMT"})
+    )
+    with patch("time.time", return_value=1790942400.0):
+        async with AsyncClient() as client:
+            with pytest.raises(GlimpseRateLimitError) as exc_info:
+                await client.batches()
+    assert exc_info.value.retry_after == 30.0
+    assert route.call_count == 1
